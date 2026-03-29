@@ -53,6 +53,17 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="supplements"
+            options={{
+              headerShown: true,
+              headerTitle: 'Supplements',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
         </Stack>
       </View>
     </QueryClientProvider>

@@ -64,6 +64,17 @@ export default function RootLayout() {
               headerBackTitle: 'Back',
             }}
           />
+          <Stack.Screen
+            name="coaching"
+            options={{
+              headerShown: true,
+              headerTitle: 'Weekly Coaching',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
         </Stack>
       </View>
     </QueryClientProvider>

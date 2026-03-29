@@ -1,9 +1,23 @@
-import { Text, View } from 'react-native';
+import { Text, View, StyleSheet } from 'react-native';
+import { colors } from '../../lib/theme';
 
 export default function Home() {
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text>Home</Text>
+    <View style={styles.container}>
+      <Text style={styles.text}>Home</Text>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  text: {
+    color: colors.text,
+    fontSize: 18,
+  },
+});

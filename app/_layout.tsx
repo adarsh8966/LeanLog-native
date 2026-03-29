@@ -6,6 +6,8 @@ import { Session } from '@supabase/supabase-js';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { supabase } from '../lib/supabase';
 import { colors } from '../lib/theme';
 
@@ -46,15 +48,35 @@ export default function RootLayout() {
   }, [fontsLoaded, session]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <View style={{ flex: 1, backgroundColor: colors.background }}>
-        <StatusBar style="light" />
-        <Stack screenOptions={{ contentStyle: { backgroundColor: colors.background }, headerShown: false }}>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        </Stack>
-      </View>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <BottomSheetModalProvider>
+        <QueryClientProvider client={queryClient}>
+          <View style={{ flex: 1, backgroundColor: colors.background }}>
+            <StatusBar style="light" />
+            <Stack
+              screenOptions={{
+                contentStyle: { backgroundColor: colors.background },
+                headerShown: false,
+              }}
+            >
+              <Stack.Screen name="index" options={{ headerShown: false }} />
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen
+                name="water"
+                options={{
+                  headerShown: true,
+                  title: 'Water Tracker',
+                  headerStyle: { backgroundColor: colors.background },
+                  headerTintColor: colors.text,
+                  headerTitleStyle: { fontFamily: 'Inter_700Bold' },
+                  headerShadowVisible: false,
+                }}
+              />
+            </Stack>
+          </View>
+        </QueryClientProvider>
+      </BottomSheetModalProvider>
+    </GestureHandlerRootView>
   );
 }

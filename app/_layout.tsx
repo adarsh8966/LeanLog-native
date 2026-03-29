@@ -75,6 +75,17 @@ export default function RootLayout() {
               headerBackTitle: 'Back',
             }}
           />
+          <Stack.Screen
+            name="settings"
+            options={{
+              headerShown: true,
+              headerTitle: 'Settings',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
         </Stack>
       </View>
     </QueryClientProvider>

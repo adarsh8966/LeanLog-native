@@ -63,6 +63,10 @@ export default function RootLayout() {
               <Stack.Screen name="(auth)" options={{ headerShown: false }} />
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen
+                name="onboarding"
+                options={{ headerShown: false, gestureEnabled: false }}
+              />
+              <Stack.Screen
                 name="water"
                 options={{
                   headerShown: true,
@@ -71,6 +75,39 @@ export default function RootLayout() {
                   headerTintColor: colors.text,
                   headerTitleStyle: { fontFamily: 'Inter_700Bold' },
                   headerShadowVisible: false,
+                }}
+              />
+              <Stack.Screen
+                name="supplements"
+                options={{
+                  headerShown: true,
+                  headerTitle: 'Supplements',
+                  headerStyle: { backgroundColor: colors.background },
+                  headerTintColor: colors.text,
+                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+                  headerBackTitle: 'Back',
+                }}
+              />
+              <Stack.Screen
+                name="coaching"
+                options={{
+                  headerShown: true,
+                  headerTitle: 'Weekly Coaching',
+                  headerStyle: { backgroundColor: colors.background },
+                  headerTintColor: colors.text,
+                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+                  headerBackTitle: 'Back',
+                }}
+              />
+              <Stack.Screen
+                name="settings"
+                options={{
+                  headerShown: true,
+                  headerTitle: 'Settings',
+                  headerStyle: { backgroundColor: colors.background },
+                  headerTintColor: colors.text,
+                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+                  headerBackTitle: 'Back',
                 }}
               />
             </Stack>

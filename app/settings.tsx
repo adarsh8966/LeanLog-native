@@ -565,19 +565,16 @@ export default function Settings() {
     setDeleteError('');
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('No active session');
-
-      await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
       });
-
+      if (!res.ok) throw new Error('Deletion failed');
       await AsyncStorage.clear();
       await supabase.auth.signOut({ scope: 'global' });
       router.replace('/(auth)/login');
-    } catch (e: any) {
-      setDeleteError(e?.message ?? 'Something went wrong');
-    } finally {
+    } catch (e) {
+      setDeleteError('Failed to delete account. Please try again.');
       setDeletingAccount(false);
     }
   }
@@ -599,12 +596,12 @@ export default function Settings() {
       const currentWeightLbs =
         weightRow?.weight_lbs ??
         (profile?.current_weight_lbs ?? 0);
-      const heightIn = profile?.height_inches ?? ftInToInches(heightFt, heightIn as unknown as number);
+      const heightInches = profile?.height_inches ?? ftInToInches(heightFt, heightIn);
       const ageNum   = parseInt(age, 10) || profile?.age || 25;
 
       const plan = calculatePlan({
         weightLbs: currentWeightLbs,
-        heightInches: heightIn,
+        heightInches: heightInches,
         age: ageNum,
         sex: (profile?.sex as 'male' | 'female') ?? sex,
         goal: (profile?.goal as any) ?? 'cutting',
@@ -1128,6 +1125,15 @@ export default function Settings() {
               )}
             </View>
           </View>
+
+          {/* ──────────── Recalculate with Your Advisor ──────────── */}
+          <TouchableOpacity
+            style={styles.advisorBtn}
+            onPress={() => router.push('/onboarding' as any)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.advisorBtnText}>✨ Recalculate with Your Advisor</Text>
+          </TouchableOpacity>
 
           {/* ──────────── Logout ──────────── */}
           <TouchableOpacity
@@ -1693,6 +1699,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontFamily: 'Inter_700Bold',
+  },
+
+  // Advisor button
+  advisorBtn: {
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+    backgroundColor: '#4f46e5',
+  },
+  advisorBtnText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: '#fff',
   },
 
   // Logout row

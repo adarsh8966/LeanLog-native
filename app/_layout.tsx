@@ -48,72 +48,48 @@ export default function RootLayout() {
   }, [fontsLoaded, session]);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <BottomSheetModalProvider>
-        <QueryClientProvider client={queryClient}>
-          <View style={{ flex: 1, backgroundColor: colors.background }}>
-            <StatusBar style="light" />
-            <Stack
-              screenOptions={{
-                contentStyle: { backgroundColor: colors.background },
-                headerShown: false,
-              }}
-            >
-              <Stack.Screen name="index" options={{ headerShown: false }} />
-              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="onboarding"
-                options={{ headerShown: false, gestureEnabled: false }}
-              />
-              <Stack.Screen
-                name="water"
-                options={{
-                  headerShown: true,
-                  title: 'Water Tracker',
-                  headerStyle: { backgroundColor: colors.background },
-                  headerTintColor: colors.text,
-                  headerTitleStyle: { fontFamily: 'Inter_700Bold' },
-                  headerShadowVisible: false,
-                }}
-              />
-              <Stack.Screen
-                name="supplements"
-                options={{
-                  headerShown: true,
-                  headerTitle: 'Supplements',
-                  headerStyle: { backgroundColor: colors.background },
-                  headerTintColor: colors.text,
-                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
-                  headerBackTitle: 'Back',
-                }}
-              />
-              <Stack.Screen
-                name="coaching"
-                options={{
-                  headerShown: true,
-                  headerTitle: 'Weekly Coaching',
-                  headerStyle: { backgroundColor: colors.background },
-                  headerTintColor: colors.text,
-                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
-                  headerBackTitle: 'Back',
-                }}
-              />
-              <Stack.Screen
-                name="settings"
-                options={{
-                  headerShown: true,
-                  headerTitle: 'Settings',
-                  headerStyle: { backgroundColor: colors.background },
-                  headerTintColor: colors.text,
-                  headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
-                  headerBackTitle: 'Back',
-                }}
-              />
-            </Stack>
-          </View>
-        </QueryClientProvider>
-      </BottomSheetModalProvider>
-    </GestureHandlerRootView>
+    <QueryClientProvider client={queryClient}>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <StatusBar style="light" />
+        <Stack screenOptions={{ contentStyle: { backgroundColor: colors.background }, headerShown: false }}>
+          <Stack.Screen name="index" options={{ headerShown: false }} />
+          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen
+            name="supplements"
+            options={{
+              headerShown: true,
+              headerTitle: 'Supplements',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
+          <Stack.Screen
+            name="coaching"
+            options={{
+              headerShown: true,
+              headerTitle: 'Weekly Coaching',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
+          <Stack.Screen
+            name="settings"
+            options={{
+              headerShown: true,
+              headerTitle: 'Settings',
+              headerStyle: { backgroundColor: colors.background },
+              headerTintColor: colors.text,
+              headerTitleStyle: { fontFamily: 'Inter_600SemiBold', color: colors.text },
+              headerBackTitle: 'Back',
+            }}
+          />
+        </Stack>
+      </View>
+    </QueryClientProvider>
   );
 }

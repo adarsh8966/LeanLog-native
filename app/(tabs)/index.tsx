@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Animated,
   useAnimatedValue,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { differenceInDays, parseISO, startOfDay, subDays } from 'date-fns';
@@ -143,6 +144,15 @@ function energyLabel(level?: number) {
 export default function Dashboard() {
   const today = todayStr();
   const xpBarWidth = useAnimatedValue(0);
+
+  // ── onboarding check ──────────────────────────────────────────────────────
+  useEffect(() => {
+    AsyncStorage.getItem('onboarding_complete').then(val => {
+      if (!val) {
+        router.replace('/onboarding');
+      }
+    });
+  }, []);
 
   // ── auth ──────────────────────────────────────────────────────────────────
   const { data: user } = useQuery({

@@ -88,6 +88,7 @@ export default function RootLayout() {
               headerBackTitle: 'Back',
             }}
           />
+          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
         </Stack>
       </View>
     </QueryClientProvider>

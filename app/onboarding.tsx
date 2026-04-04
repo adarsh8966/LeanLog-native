@@ -12,7 +12,8 @@ import {
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
-import { colors, spacing, borderRadius } from '../lib/theme';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { colors, spacing, borderRadius, GOAL_AGGRESSIVENESS } from '../lib/theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -386,9 +387,236 @@ function Step0({
   );
 }
 
-// ─── Placeholder steps ────────────────────────────────────────────────────────
+// ─── Step 1 — Goal ───────────────────────────────────────────────────────────
 
-function Step1() { return null; }
+function Step1({
+  formData,
+  setFormData,
+  errors,
+  goalMode,
+  setGoalMode,
+}: {
+  formData: FormData;
+  setFormData: (fn: (prev: FormData) => FormData) => void;
+  errors: Record<string, string>;
+  goalMode: 'select' | 'details';
+  setGoalMode: (mode: 'select' | 'details') => void;
+}) {
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const isImperial = formData.unit_system === 'imperial';
+  const isBulking = formData.goal === 'bulking';
+
+  const minDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  const targetDateObj = formData.target_date
+    ? new Date(formData.target_date + 'T12:00:00')
+    : undefined;
+
+  function setField<K extends keyof FormData>(key: K, value: FormData[K]) {
+    setFormData(prev => ({ ...prev, [key]: value }));
+  }
+
+  function handleGoalSelect(goal: 'cutting' | 'bulking') {
+    setFormData(prev => ({
+      ...prev,
+      goal,
+      primary_focus: goal === 'cutting' ? 'fat_loss_muscle' : 'muscle_gain',
+    }));
+    setGoalMode('details');
+  }
+
+  // ── Select mode ──────────────────────────────────────────────────────────────
+  if (goalMode === 'select') {
+    return (
+      <ScrollView contentContainerStyle={styles.stepContent} keyboardShouldPersistTaps="handled">
+        <Text style={styles.stepTitle}>Your Goal</Text>
+        <Text style={styles.stepSubtitle}>What are you working towards?</Text>
+
+        {errors.goal ? (
+          <Text style={[styles.errorText, { marginBottom: spacing.sm }]}>{errors.goal}</Text>
+        ) : null}
+
+        <Pressable
+          style={[styles.goalCard, formData.goal === 'cutting' && { borderColor: colors.primary }]}
+          onPress={() => handleGoalSelect('cutting')}
+        >
+          <Text style={styles.goalCardEmoji}>🔥</Text>
+          <Text style={styles.goalCardTitle}>Cut</Text>
+          <Text style={styles.goalCardDesc}>Lose fat, preserve muscle</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.goalCard, formData.goal === 'bulking' && { borderColor: colors.primary }]}
+          onPress={() => handleGoalSelect('bulking')}
+        >
+          <Text style={styles.goalCardEmoji}>💪</Text>
+          <Text style={styles.goalCardTitle}>Bulk</Text>
+          <Text style={styles.goalCardDesc}>Build muscle, gain strength</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
+  // ── Details mode ─────────────────────────────────────────────────────────────
+  const aggressivenessKeys = Object.keys(
+    GOAL_AGGRESSIVENESS,
+  ) as (keyof typeof GOAL_AGGRESSIVENESS)[];
+
+  const primaryFocusOptions = isBulking
+    ? [
+        { key: 'muscle_gain', label: 'Muscle Gain', desc: 'Maximize hypertrophy' },
+        { key: 'lean_bulk', label: 'Lean Bulk', desc: 'Muscle with minimal fat' },
+      ]
+    : [
+        { key: 'fat_loss', label: 'Fat Loss', desc: 'Maximize fat burning' },
+        { key: 'fat_loss_muscle', label: 'Fat Loss + Muscle', desc: 'Preserve lean mass' },
+      ];
+
+  const displayGoalWeight =
+    !isImperial && formData.goal_weight_lbs
+      ? String((parseFloat(formData.goal_weight_lbs) / 2.20462).toFixed(1))
+      : formData.goal_weight_lbs;
+
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} keyboardShouldPersistTaps="handled">
+      <Text style={styles.stepTitle}>{isBulking ? 'Bulk 💪' : 'Cut 🔥'} Details</Text>
+      <Text style={styles.stepSubtitle}>Fine-tune your approach</Text>
+
+      {/* Aggressiveness */}
+      <Text style={styles.label}>Approach</Text>
+      {aggressivenessKeys.map(key => {
+        const opt = GOAL_AGGRESSIVENESS[key];
+        const selected = formData.aggressiveness === key;
+        return (
+          <Pressable
+            key={key}
+            style={[styles.verticalOption, selected && { borderColor: colors.primary }]}
+            onPress={() => setField('aggressiveness', key)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.verticalOptionLabel, selected && { color: colors.primary }]}>
+                {opt.label}
+              </Text>
+              <Text style={styles.verticalOptionDesc}>{opt.desc}</Text>
+            </View>
+            <View
+              style={[
+                styles.radioCircle,
+                selected && { borderColor: colors.primary, backgroundColor: colors.primary },
+              ]}
+            />
+          </Pressable>
+        );
+      })}
+
+      {/* Caloric Surplus Level — bulking only */}
+      {isBulking && (
+        <>
+          <Text style={styles.label}>Caloric Surplus</Text>
+          <View style={styles.pillRow}>
+            {(
+              [
+                { key: 'mild', label: 'Mild +200' },
+                { key: 'moderate', label: 'Moderate +300' },
+                { key: 'high', label: 'High +500' },
+              ] as const
+            ).map(opt => (
+              <PillButton
+                key={opt.key}
+                label={opt.label}
+                selected={formData.caloric_surplus_level === opt.key}
+                onPress={() => setField('caloric_surplus_level', opt.key)}
+              />
+            ))}
+          </View>
+        </>
+      )}
+
+      {/* Primary Focus */}
+      <Text style={styles.label}>Primary Focus</Text>
+      {primaryFocusOptions.map(opt => {
+        const selected = formData.primary_focus === opt.key;
+        return (
+          <Pressable
+            key={opt.key}
+            style={[styles.verticalOption, selected && { borderColor: colors.primary }]}
+            onPress={() => setField('primary_focus', opt.key)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.verticalOptionLabel, selected && { color: colors.primary }]}>
+                {opt.label}
+              </Text>
+              <Text style={styles.verticalOptionDesc}>{opt.desc}</Text>
+            </View>
+            <View
+              style={[
+                styles.radioCircle,
+                selected && { borderColor: colors.primary, backgroundColor: colors.primary },
+              ]}
+            />
+          </Pressable>
+        );
+      })}
+
+      {/* Target Weight */}
+      <Text style={styles.label}>Target Weight ({isImperial ? 'lbs' : 'kg'}) *</Text>
+      <TextInput
+        style={[styles.input, errors.goal_weight_lbs ? styles.inputError : null]}
+        value={displayGoalWeight}
+        onChangeText={raw => {
+          const num = parseFloat(raw);
+          if (!isNaN(num) && formData.unit_system === 'metric') {
+            setField('goal_weight_lbs', String((num * 2.20462).toFixed(1)));
+          } else {
+            setField('goal_weight_lbs', raw);
+          }
+        }}
+        placeholder={isImperial ? 'e.g. 165' : 'e.g. 75'}
+        placeholderTextColor={colors.textMuted}
+        keyboardType="decimal-pad"
+      />
+      {errors.goal_weight_lbs ? (
+        <Text style={styles.errorText}>{errors.goal_weight_lbs}</Text>
+      ) : null}
+
+      {/* Target Date */}
+      <Text style={styles.label}>Target Date *</Text>
+      <Pressable
+        style={[styles.input, styles.dateButton, errors.target_date ? styles.inputError : null]}
+        onPress={() => setShowDatePicker(true)}
+      >
+        <Text
+          style={{
+            color: formData.target_date ? colors.text : colors.textMuted,
+            fontFamily: 'Inter_400Regular',
+            fontSize: 15,
+          }}
+        >
+          {formData.target_date || 'Select a date'}
+        </Text>
+      </Pressable>
+      {errors.target_date ? <Text style={styles.errorText}>{errors.target_date}</Text> : null}
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={targetDateObj || minDate}
+          mode="date"
+          minimumDate={minDate}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(event: any, date?: Date) => {
+            if (Platform.OS === 'android') setShowDatePicker(false);
+            if (date && event.type === 'set') {
+              setField('target_date', date.toLocaleDateString('en-CA'));
+            }
+          }}
+        />
+      )}
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
+// ─── Placeholder steps ────────────────────────────────────────────────────────
 function Step2() { return null; }
 function Step3() { return null; }
 function Step4() { return null; }
@@ -397,6 +625,15 @@ function Step6() { return null; }
 function Step7() { return null; }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
+
+function validateStep1Details(formData: FormData): Record<string, string> {
+  const errs: Record<string, string> = {};
+  const w = parseFloat(formData.goal_weight_lbs);
+  if (!formData.goal_weight_lbs || isNaN(w) || w < 30)
+    errs.goal_weight_lbs = 'Enter a valid target weight (≥ 30 lbs)';
+  if (!formData.target_date) errs.target_date = 'Please select a target date';
+  return errs;
+}
 
 function validateStep0(formData: FormData): Record<string, string> {
   const errs: Record<string, string> = {};
@@ -417,6 +654,7 @@ function validateStep0(formData: FormData): Record<string, string> {
 export default function OnboardingScreen() {
   const [ageGatePassed, setAgeGatePassed] = useState<boolean | null>(null);
   const [step, setStep] = useState(0);
+  const [step1GoalMode, setStep1GoalMode] = useState<'select' | 'details'>('select');
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM);
   const [suggestedMacros, setSuggestedMacros] = useState<Record<string, number> | null>(null);
   const [confirmedMacros, setConfirmedMacros] = useState<Record<string, number> | null>(null);
@@ -478,16 +716,29 @@ export default function OnboardingScreen() {
   function handleNext() {
     if (step === 0) {
       const errs = validateStep0(formData);
-      if (Object.keys(errs).length > 0) {
-        setErrors(errs);
-        return;
-      }
+      if (Object.keys(errs).length > 0) { setErrors(errs); return; }
+      setErrors({});
+    }
+    if (step === 1 && step1GoalMode === 'select') {
+      if (!formData.goal) { setErrors({ goal: 'Please select a goal' }); return; }
+      setErrors({});
+      setStep1GoalMode('details');
+      return;
+    }
+    if (step === 1 && step1GoalMode === 'details') {
+      const errs = validateStep1Details(formData);
+      if (Object.keys(errs).length > 0) { setErrors(errs); return; }
       setErrors({});
     }
     setStep(s => Math.min(s + 1, 7));
   }
 
   function handleBack() {
+    if (step === 1 && step1GoalMode === 'details') {
+      setStep1GoalMode('select');
+      setErrors({});
+      return;
+    }
     setStep(s => Math.max(s - 1, 0));
     setErrors({});
   }
@@ -497,7 +748,15 @@ export default function OnboardingScreen() {
       case 0:
         return <Step0 formData={formData} setFormData={setFormData} errors={errors} />;
       case 1:
-        return <Step1 />;
+        return (
+          <Step1
+            formData={formData}
+            setFormData={setFormData}
+            errors={errors}
+            goalMode={step1GoalMode}
+            setGoalMode={setStep1GoalMode}
+          />
+        );
       case 2:
         return <Step2 />;
       case 3:
@@ -739,5 +998,64 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_700Bold',
     color: '#000',
+  },
+  // Step 1 — Goal
+  goalCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    alignItems: 'center',
+    marginTop: spacing.md,
+  },
+  goalCardEmoji: {
+    fontSize: 40,
+    marginBottom: spacing.sm,
+  },
+  goalCardTitle: {
+    fontSize: 22,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  goalCardDesc: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  verticalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    marginTop: spacing.sm,
+  },
+  verticalOptionLabel: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  verticalOptionDesc: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+  },
+  radioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.border,
+    marginLeft: spacing.md,
+  },
+  dateButton: {
+    justifyContent: 'center',
   },
 });

@@ -89,6 +89,7 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+          <Stack.Screen name="food-log" options={{ headerShown: false }} />
         </Stack>
       </View>
     </QueryClientProvider>

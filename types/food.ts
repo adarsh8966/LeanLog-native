@@ -1,6 +1,6 @@
 // ─── Food search result ───────────────────────────────────────────────────────
 
-export type FoodSource = 'fatsecret' | 'usda' | 'openfoodfacts';
+export type FoodSource = 'fatsecret' | 'usda' | 'openfoodfacts' | 'meal_photo';
 
 /**
  * Normalised per-100g result returned by all search functions.
@@ -27,6 +27,10 @@ export type FoodResult = {
   fatsecretFoodId: string | null;
   /** FatSecret serving_id used for the normalised values */
   fatsecretServingId: string | null;
+  /** AI confidence level — only set for meal_photo source */
+  confidence?: 'low' | 'medium' | 'high';
+  /** AI estimate notes — only set for meal_photo source */
+  notes?: string;
 };
 
 // ─── Serving option (from food.get.v4) ───────────────────────────────────────

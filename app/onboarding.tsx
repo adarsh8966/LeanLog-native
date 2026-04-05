@@ -8,8 +8,11 @@ import {
   Pressable,
   ActivityIndicator,
   Platform,
+  Alert,
+  Switch,
 } from 'react-native';
 import { router } from 'expo-router';
+import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -925,11 +928,342 @@ function Step3({
   );
 }
 
-// ─── Placeholder steps ────────────────────────────────────────────────────────
-function Step4() { return null; }
-function Step5() { return null; }
-function Step6() { return null; }
-function Step7() { return null; }
+// ─── Step 4 — Water Goal ──────────────────────────────────────────────────────
+
+const WATER_PRESETS_OZ = [
+  { label: '64 oz', sublabel: '8 cups', value: 64 },
+  { label: '80 oz', sublabel: '10 cups', value: 80 },
+  { label: '96 oz', sublabel: '12 cups', value: 96 },
+  { label: '128 oz', sublabel: '1 gallon', value: 128 },
+];
+
+const WATER_PRESETS_ML = [
+  { label: '1.5 L', sublabel: '~51 oz', value: 51 },
+  { label: '2 L', sublabel: '~68 oz', value: 68 },
+  { label: '2.5 L', sublabel: '~85 oz', value: 85 },
+  { label: '3 L', sublabel: '~101 oz', value: 101 },
+];
+
+function Step4({
+  formData,
+  setFormData,
+}: {
+  formData: FormData;
+  setFormData: React.Dispatch<React.SetStateAction<FormData>>;
+}) {
+  const isMetric = formData.unit_system === 'metric';
+  const presets = isMetric ? WATER_PRESETS_ML : WATER_PRESETS_OZ;
+  const [customMode, setCustomMode] = useState(false);
+  const [customInput, setCustomInput] = useState('');
+
+  // Suggest based on weight: body weight lbs / 2 = oz
+  const weightLbs = parseFloat(formData.current_weight_lbs) || 0;
+  const suggestedOz = weightLbs > 0 ? Math.round(weightLbs / 2 / 8) * 8 : null;
+
+  function selectPreset(oz: number) {
+    setCustomMode(false);
+    setFormData(f => ({ ...f, water_goal_oz: oz }));
+  }
+
+  function applyCustom() {
+    const raw = parseFloat(customInput);
+    if (!raw || raw < 16 || raw > 400) return;
+    const oz = isMetric ? Math.round((raw / 1000) * 33.814) : Math.round(raw);
+    setFormData(f => ({ ...f, water_goal_oz: oz }));
+    setCustomMode(false);
+  }
+
+  const displayGoal = formData.water_goal_oz
+    ? isMetric
+      ? `${Math.round(formData.water_goal_oz * 29.5735 / 1000 * 10) / 10} L`
+      : `${formData.water_goal_oz} oz`
+    : null;
+
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} showsVerticalScrollIndicator={false}>
+      <Text style={styles.stepTitle}>Daily Water Goal 💧</Text>
+      <Text style={styles.stepSubtitle}>
+        Staying hydrated supports performance, metabolism, and recovery.
+      </Text>
+
+      {suggestedOz && (
+        <View style={styles.waterSuggestBanner}>
+          <Text style={styles.waterSuggestText}>
+            Based on your weight, we suggest{' '}
+            <Text style={{ color: colors.primary, fontFamily: 'Inter_700Bold' }}>
+              {isMetric
+                ? `${Math.round(suggestedOz * 29.5735 / 100) / 10} L`
+                : `${suggestedOz} oz`}
+            </Text>{' '}
+            per day.
+          </Text>
+        </View>
+      )}
+
+      <Text style={styles.label}>Choose a goal</Text>
+      <View style={styles.waterPresetGrid}>
+        {presets.map(p => {
+          const selected = formData.water_goal_oz === p.value;
+          return (
+            <Pressable
+              key={p.value}
+              style={[styles.waterPresetCard, selected && { borderColor: colors.primary }]}
+              onPress={() => selectPreset(p.value)}
+            >
+              <Text style={[styles.waterPresetLabel, selected && { color: colors.primary }]}>
+                {p.label}
+              </Text>
+              <Text style={styles.waterPresetSublabel}>{p.sublabel}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {!customMode && (
+        <Pressable style={styles.tertiaryActionBtn} onPress={() => setCustomMode(true)}>
+          <Text style={styles.tertiaryActionBtnText}>Set custom amount</Text>
+        </Pressable>
+      )}
+
+      {customMode && (
+        <View style={{ marginTop: spacing.md }}>
+          <Text style={styles.label}>
+            Custom amount ({isMetric ? 'ml' : 'oz'})
+          </Text>
+          <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+            <TextInput
+              style={[styles.input, { flex: 1 }]}
+              keyboardType="numeric"
+              value={customInput}
+              onChangeText={setCustomInput}
+              placeholder={isMetric ? 'e.g. 2000' : 'e.g. 80'}
+              placeholderTextColor={colors.textMuted}
+            />
+            <Pressable style={styles.waterApplyBtn} onPress={applyCustom}>
+              <Text style={styles.waterApplyBtnText}>Apply</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {displayGoal && (
+        <View style={styles.waterGoalConfirm}>
+          <Text style={styles.waterGoalConfirmText}>
+            Goal set to{' '}
+            <Text style={{ color: colors.primary, fontFamily: 'Inter_700Bold' }}>
+              {displayGoal}
+            </Text>
+          </Text>
+        </View>
+      )}
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
+// ─── Step 5 — Coach ───────────────────────────────────────────────────────────
+
+function Step5({
+  formData,
+  setFormData,
+}: {
+  formData: FormData;
+  setFormData: React.Dispatch<React.SetStateAction<FormData>>;
+}) {
+  const enabled = formData.coaching_enabled;
+
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} showsVerticalScrollIndicator={false}>
+      <Text style={styles.stepTitle}>AI Weekly Coach 🤖</Text>
+      <Text style={styles.stepSubtitle}>
+        Your personal coach reviews your progress every week and adapts your plan automatically.
+      </Text>
+
+      <Pressable
+        style={[styles.coachToggleCard, enabled && { borderColor: colors.primary }]}
+        onPress={() => setFormData(f => ({ ...f, coaching_enabled: !f.coaching_enabled }))}
+      >
+        <View style={{ flex: 1, gap: spacing.xs }}>
+          <Text style={[styles.coachToggleTitle, enabled && { color: colors.primary }]}>
+            Weekly AI Coaching
+          </Text>
+          <Text style={styles.coachToggleDesc}>
+            {enabled ? 'Enabled — your plan adapts each week' : 'Disabled — you manage goals manually'}
+          </Text>
+        </View>
+        <Switch
+          value={enabled}
+          onValueChange={v => setFormData(f => ({ ...f, coaching_enabled: v }))}
+          trackColor={{ false: colors.border, true: colors.primary }}
+          thumbColor={Platform.OS === 'android' ? (enabled ? colors.primary : colors.textMuted) : '#fff'}
+        />
+      </Pressable>
+
+      <View style={styles.coachFeatureList}>
+        {[
+          { emoji: '📊', title: 'Weekly Progress Review', desc: 'Analyzes calories, protein, workouts, and weight trend.' },
+          { emoji: '🎯', title: 'Adaptive Goal Updates', desc: 'Accept coach recommendations to update your calorie and macro targets.' },
+          { emoji: '💬', title: 'Up to 5 Chats/Day', desc: 'Chat with your coach to refine recommendations and ask questions.' },
+          { emoji: '🔒', title: 'Private & Secure', desc: 'All coaching happens via encrypted Edge Functions — your data stays private.' },
+        ].map(item => (
+          <View key={item.title} style={styles.coachFeatureRow}>
+            <Text style={styles.coachFeatureEmoji}>{item.emoji}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.coachFeatureTitle}>{item.title}</Text>
+              <Text style={styles.coachFeatureDesc}>{item.desc}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.coachNote}>
+        You can enable or disable coaching at any time in Settings.
+      </Text>
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
+// ─── Step 6 — Confirm ─────────────────────────────────────────────────────────
+
+function Step6({
+  formData,
+  macros,
+}: {
+  formData: FormData;
+  macros: Record<string, number> | null;
+}) {
+  const isMetric = formData.unit_system === 'metric';
+  const heightInches = parseInt(formData.height_ft) * 12 + parseInt(formData.height_in || '0');
+  const heightCm = Math.round(heightInches * 2.54);
+  const weightKg = Math.round(parseFloat(formData.current_weight_lbs) * 0.453592);
+
+  const waterDisplay = formData.water_goal_oz
+    ? isMetric
+      ? `${Math.round(formData.water_goal_oz * 29.5735 / 100) / 10} L/day`
+      : `${formData.water_goal_oz} oz/day`
+    : 'Not set';
+
+  const goalLabel = formData.goal === 'cutting' ? 'Lose Fat 🔥'
+    : formData.goal === 'bulking' ? 'Build Muscle 💪'
+    : formData.goal || '—';
+
+  function ConfirmRow({ label, value }: { label: string; value: string }) {
+    return (
+      <View style={styles.confirmRow}>
+        <Text style={styles.confirmLabel}>{label}</Text>
+        <Text style={styles.confirmValue}>{value}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} showsVerticalScrollIndicator={false}>
+      <Text style={styles.stepTitle}>Review Your Plan ✅</Text>
+      <Text style={styles.stepSubtitle}>
+        Here's a summary of your onboarding choices. You can change everything later in Settings.
+      </Text>
+
+      <View style={styles.confirmSection}>
+        <Text style={styles.confirmSectionTitle}>Profile</Text>
+        <ConfirmRow label="Name" value={formData.name || '—'} />
+        <ConfirmRow label="Age" value={formData.age || '—'} />
+        <ConfirmRow label="Sex" value={formData.sex ? (formData.sex.charAt(0).toUpperCase() + formData.sex.slice(1)) : '—'} />
+        <ConfirmRow
+          label="Weight"
+          value={isMetric
+            ? `${weightKg} kg`
+            : `${formData.current_weight_lbs} lbs`}
+        />
+        <ConfirmRow
+          label="Height"
+          value={isMetric
+            ? `${heightCm} cm`
+            : `${formData.height_ft}′ ${formData.height_in}″`}
+        />
+      </View>
+
+      <View style={styles.confirmSection}>
+        <Text style={styles.confirmSectionTitle}>Goal & Diet</Text>
+        <ConfirmRow label="Goal" value={goalLabel} />
+        <ConfirmRow label="Diet" value={
+          formData.diet_preference.charAt(0).toUpperCase() + formData.diet_preference.slice(1)
+        } />
+        <ConfirmRow label="Activity" value={formData.activity_level.replace(/_/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase())} />
+      </View>
+
+      {macros && (
+        <View style={styles.confirmSection}>
+          <Text style={styles.confirmSectionTitle}>Daily Targets</Text>
+          <ConfirmRow label="Calories" value={`${macros.calories} kcal`} />
+          <ConfirmRow label="Protein" value={`${macros.protein} g`} />
+          <ConfirmRow label="Carbs" value={`${macros.carbs} g`} />
+          <ConfirmRow label="Fat" value={`${macros.fat} g`} />
+        </View>
+      )}
+
+      <View style={styles.confirmSection}>
+        <Text style={styles.confirmSectionTitle}>Other Settings</Text>
+        <ConfirmRow label="Water Goal" value={waterDisplay} />
+        <ConfirmRow label="AI Coaching" value={formData.coaching_enabled ? 'Enabled' : 'Disabled'} />
+      </View>
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
+// ─── Step 7 — Disclaimer ──────────────────────────────────────────────────────
+
+const DISCLAIMER_TEXT = `LeanLog is a general health and fitness tracking tool. It is not a medical device, and the information it provides is not intended to diagnose, treat, cure, or prevent any medical condition.
+
+• Calorie and macro recommendations are estimates based on commonly accepted formulas (Mifflin-St Jeor, Harris-Benedict, Katch-McArdle). Individual results vary.
+
+• AI coaching suggestions are generated by an AI model and should not replace the advice of a qualified healthcare professional, registered dietitian, or certified personal trainer.
+
+• If you have a medical condition, eating disorder history, or are pregnant or nursing, consult your doctor before making changes to your diet or exercise routine.
+
+• Rapid weight loss (more than 2 lbs/week) can be harmful. LeanLog will not intentionally create plans below 1,200 kcal/day for women or 1,500 kcal/day for men.
+
+By continuing, you acknowledge that you have read and understand this disclaimer.`;
+
+function Step7({
+  accepted,
+  setAccepted,
+}: {
+  accepted: boolean;
+  setAccepted: (v: boolean) => void;
+}) {
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} showsVerticalScrollIndicator={false}>
+      <Text style={styles.stepTitle}>Health Disclaimer ⚕️</Text>
+      <Text style={styles.stepSubtitle}>
+        Please read before getting started.
+      </Text>
+
+      <View style={styles.disclaimerBox}>
+        <Text style={styles.disclaimerText}>{DISCLAIMER_TEXT}</Text>
+      </View>
+
+      <Pressable
+        style={styles.disclaimerCheckRow}
+        onPress={() => setAccepted(!accepted)}
+      >
+        <View style={[styles.checkbox, accepted && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
+          {accepted && <Text style={styles.checkmark}>✓</Text>}
+        </View>
+        <Text style={styles.disclaimerCheckLabel}>
+          I understand and agree to continue
+        </Text>
+      </Pressable>
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
@@ -966,6 +1300,7 @@ export default function OnboardingScreen() {
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM);
   const [suggestedMacros, setSuggestedMacros] = useState<Record<string, number> | null>(null);
   const [confirmedMacros, setConfirmedMacros] = useState<Record<string, number> | null>(null);
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -1021,7 +1356,7 @@ export default function OnboardingScreen() {
   // and we just show the same gate — but we need a separate blocked state.
   // Handled below with a separate component mounted inside AgeGate.
 
-  function handleNext() {
+  async function handleNext() {
     if (step === 0) {
       const errs = validateStep0(formData);
       if (Object.keys(errs).length > 0) { setErrors(errs); return; }
@@ -1040,7 +1375,69 @@ export default function OnboardingScreen() {
     }
     // Step 3 result state: navigation handled by step-internal buttons
     if (step === 3 && step3ResultShowing) return;
+    // Step 4: set default water goal if not chosen
+    if (step === 4 && !formData.water_goal_oz) {
+      const weightLbs = parseFloat(formData.current_weight_lbs) || 0;
+      const defaultOz = weightLbs > 0 ? Math.round(weightLbs / 2 / 8) * 8 : 64;
+      setFormData(f => ({ ...f, water_goal_oz: Math.max(defaultOz, 48) }));
+    }
+    // Step 7: Get Started — save profile
+    if (step === 7) {
+      if (!disclaimerAccepted) {
+        Alert.alert('Agreement Required', 'Please read and accept the disclaimer to continue.');
+        return;
+      }
+      await handleFinish();
+      return;
+    }
     setStep(s => Math.min(s + 1, 7));
+  }
+
+  async function handleFinish() {
+    setSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const heightInches = parseInt(formData.height_ft) * 12 + parseInt(formData.height_in || '0');
+      const macros = confirmedMacros ?? suggestedMacros;
+
+      const { error } = await supabase
+        .from('user_profiles')
+        .upsert({
+          user_id: user.id,
+          username: formData.name.trim() || undefined,
+          age: parseInt(formData.age) || undefined,
+          sex: formData.sex || undefined,
+          current_weight_lbs: parseFloat(formData.current_weight_lbs) || undefined,
+          goal_weight_lbs: parseFloat(formData.goal_weight_lbs) || undefined,
+          height_inches: heightInches || undefined,
+          unit_system: formData.unit_system,
+          water_goal_oz: formData.water_goal_oz ?? 64,
+          activity_level: formData.activity_level,
+          experience_level: formData.experience_level || undefined,
+          diet_preference: formData.diet_preference,
+          goal: formData.goal || undefined,
+          goal_aggressiveness: formData.aggressiveness,
+          calorie_goal: macros?.calories ?? undefined,
+          protein_goal: macros?.protein ?? undefined,
+          carbs_goal: macros?.carbs ?? undefined,
+          fat_goal: macros?.fat ?? undefined,
+          coaching_enabled: formData.coaching_enabled,
+          target_date: formData.target_date || undefined,
+          disclaimer_accepted: true,
+          onboarding_complete: true,
+        }, { onConflict: 'user_id' });
+
+      if (error) throw error;
+
+      await AsyncStorage.setItem('onboarding_complete', 'true');
+      router.replace('/(tabs)');
+    } catch (err: unknown) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setSaving(false);
+    }
   }
 
   function handleBack() {
@@ -1080,13 +1477,13 @@ export default function OnboardingScreen() {
           />
         );
       case 4:
-        return <Step4 />;
+        return <Step4 formData={formData} setFormData={setFormData} />;
       case 5:
-        return <Step5 />;
+        return <Step5 formData={formData} setFormData={setFormData} />;
       case 6:
-        return <Step6 />;
+        return <Step6 formData={formData} macros={confirmedMacros ?? suggestedMacros} />;
       case 7:
-        return <Step7 />;
+        return <Step7 accepted={disclaimerAccepted} setAccepted={setDisclaimerAccepted} />;
       default:
         return null;
     }
@@ -1568,5 +1965,212 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_700Bold',
     color: '#000',
+  },
+
+  // ── Step 4 — Water Goal ────────────────────────────────────────────────────
+  waterSuggestBanner: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  waterSuggestText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    lineHeight: 20,
+  },
+  waterPresetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  waterPresetCard: {
+    width: '47.5%',
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  waterPresetLabel: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+  },
+  waterPresetSublabel: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  waterApplyBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.lg,
+    justifyContent: 'center',
+  },
+  waterApplyBtnText: {
+    fontSize: 15,
+    fontFamily: 'Inter_700Bold',
+    color: '#000',
+  },
+  waterGoalConfirm: {
+    marginTop: spacing.lg,
+    alignItems: 'center',
+  },
+  waterGoalConfirmText: {
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: colors.text,
+  },
+
+  // ── Step 5 — Coach ─────────────────────────────────────────────────────────
+  coachToggleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    marginTop: spacing.md,
+    gap: spacing.md,
+  },
+  coachToggleTitle: {
+    fontSize: 17,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+  },
+  coachToggleDesc: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+  },
+  coachFeatureList: {
+    marginTop: spacing.lg,
+    gap: spacing.md,
+  },
+  coachFeatureRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+  },
+  coachFeatureEmoji: {
+    fontSize: 22,
+    marginTop: 2,
+  },
+  coachFeatureTitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+    marginBottom: 2,
+  },
+  coachFeatureDesc: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    lineHeight: 19,
+  },
+  coachNote: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.lg,
+  },
+
+  // ── Step 6 — Confirm ───────────────────────────────────────────────────────
+  confirmSection: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    marginTop: spacing.md,
+    overflow: 'hidden',
+  },
+  confirmSectionTitle: {
+    fontSize: 12,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  confirmRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  confirmLabel: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+  },
+  confirmValue: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+    maxWidth: '60%',
+    textAlign: 'right',
+  },
+
+  // ── Step 7 — Disclaimer ────────────────────────────────────────────────────
+  disclaimerBox: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
+    marginTop: spacing.sm,
+  },
+  disclaimerText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    lineHeight: 22,
+  },
+  disclaimerCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.sm,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkmark: {
+    fontSize: 14,
+    color: '#000',
+    fontFamily: 'Inter_700Bold',
+  },
+  disclaimerCheckLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
   },
 });

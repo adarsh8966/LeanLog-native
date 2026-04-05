@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,15 @@ import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { colors, spacing, borderRadius, GOAL_AGGRESSIVENESS } from '../lib/theme';
+import {
+  colors,
+  spacing,
+  borderRadius,
+  GOAL_AGGRESSIVENESS,
+  DIET_PREFERENCES,
+  ACTIVITY_MULTIPLIERS,
+} from '../lib/theme';
+import { calculatePlan } from '../lib/planEngine';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -616,9 +624,308 @@ function Step1({
   );
 }
 
+// ─── Step 2 — Diet ───────────────────────────────────────────────────────────
+
+function Step2({
+  formData,
+  setFormData,
+}: {
+  formData: FormData;
+  setFormData: (fn: (prev: FormData) => FormData) => void;
+}) {
+  const dietKeys = Object.keys(DIET_PREFERENCES) as (keyof typeof DIET_PREFERENCES)[];
+  const isVegan = formData.diet_preference === 'vegan';
+
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} keyboardShouldPersistTaps="handled">
+      <Text style={styles.stepTitle}>Diet Preference</Text>
+      <Text style={styles.stepSubtitle}>Choose what works for your lifestyle</Text>
+
+      {isVegan && (
+        <View style={styles.infoBanner}>
+          <Text style={styles.infoBannerText}>
+            🌱 We've added key supplements vegans often need to your tracker
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.dietGrid}>
+        {dietKeys.map(key => {
+          const diet = DIET_PREFERENCES[key];
+          const selected = formData.diet_preference === key;
+          return (
+            <Pressable
+              key={key}
+              style={[styles.dietCard, selected && { borderColor: colors.primary }]}
+              onPress={() => setFormData(prev => ({ ...prev, diet_preference: key }))}
+            >
+              <Text style={styles.dietCardEmoji}>{diet.emoji}</Text>
+              <Text style={[styles.dietCardLabel, selected && { color: colors.primary }]}>
+                {diet.label}
+              </Text>
+              <Text style={styles.dietCardDesc} numberOfLines={2}>
+                {diet.desc}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
+// ─── Step 3 — AI Plan ────────────────────────────────────────────────────────
+
+const LOADING_MESSAGES = [
+  'Analyzing your body composition...',
+  'Calculating your metabolism...',
+  'Applying your diet preference...',
+  'Building your macro targets...',
+];
+
+const FORMULA_LABELS: Record<string, string> = {
+  'katch-mcardle': 'Katch-McArdle (body fat %)',
+  'revised-harris-benedict': 'Revised Harris-Benedict (BMI ≥ 30)',
+  'mifflin-st-jeor': 'Mifflin-St Jeor',
+};
+
+type CalcResult = {
+  formulaKey: string;
+  bmr: number;
+  tdee: number;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+};
+
+function Step3({
+  formData,
+  setFormData,
+  setSuggestedMacros,
+  setStep,
+  onResultChange,
+}: {
+  formData: FormData;
+  setFormData: (fn: (prev: FormData) => FormData) => void;
+  setSuggestedMacros: (m: Record<string, number> | null) => void;
+  setStep: React.Dispatch<React.SetStateAction<number>>;
+  onResultChange: (showing: boolean) => void;
+}) {
+  const [activityKey, setActivityKey] = useState<keyof typeof ACTIVITY_MULTIPLIERS>(
+    (formData.activity_level as keyof typeof ACTIVITY_MULTIPLIERS) || 'moderately_active',
+  );
+  const [loading, setLoading] = useState(false);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+  const [result, setResult] = useState<CalcResult | null>(null);
+  const [showCalc, setShowCalc] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  function handleCalculate() {
+    setLoading(true);
+    setLoadingMsgIdx(0);
+    let idx = 0;
+    intervalRef.current = setInterval(() => {
+      idx = (idx + 1) % LOADING_MESSAGES.length;
+      setLoadingMsgIdx(idx);
+    }, 1000);
+
+    timeoutRef.current = setTimeout(() => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+
+      const heightInches =
+        parseInt(formData.height_ft) * 12 + parseInt(formData.height_in);
+
+      const plan = calculatePlan({
+        weightLbs: parseFloat(formData.current_weight_lbs),
+        heightInches,
+        age: parseInt(formData.age),
+        sex: formData.sex as 'male' | 'female',
+        goal: formData.goal as 'cutting' | 'bulking' | 'recomposition' | 'maintenance',
+        primaryFocus: formData.primary_focus,
+        activityLevel: activityKey,
+        aggressiveness: formData.aggressiveness as keyof typeof GOAL_AGGRESSIVENESS,
+        dietPreference: formData.diet_preference as keyof typeof DIET_PREFERENCES,
+        bodyFatPct: formData.body_fat_pct ? parseFloat(formData.body_fat_pct) : undefined,
+      });
+
+      setFormData(prev => ({
+        ...prev,
+        bmr_calculated: plan.bmr,
+        tdee_calculated: plan.tdee,
+        bmr_formula: FORMULA_LABELS[plan.formulaKey] ?? plan.formulaKey,
+        activity_level: activityKey,
+      }));
+      setSuggestedMacros({
+        calories: plan.calories,
+        protein: plan.protein,
+        carbs: plan.carbs,
+        fat: plan.fat,
+      });
+      setResult(plan);
+      setLoading(false);
+      onResultChange(true);
+    }, 4000);
+  }
+
+  function handleRecalculate() {
+    setResult(null);
+    setShowCalc(false);
+    onResultChange(false);
+  }
+
+  function advanceToStep4() {
+    onResultChange(false);
+    setStep(s => s + 1);
+  }
+
+  const activityKeys = Object.keys(
+    ACTIVITY_MULTIPLIERS,
+  ) as (keyof typeof ACTIVITY_MULTIPLIERS)[];
+
+  // ── Loading ─────────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator color={colors.primary} size="large" />
+        <Text style={styles.loadingMsg}>{LOADING_MESSAGES[loadingMsgIdx]}</Text>
+      </View>
+    );
+  }
+
+  // ── Result ──────────────────────────────────────────────────────────────────
+  if (result) {
+    const deficitOrSurplus =
+      formData.goal === 'bulking'
+        ? `Surplus of ${result.calories - result.tdee} kcal for ${formData.aggressiveness} bulk`
+        : `Deficit of ${result.tdee - result.calories} kcal for ${formData.aggressiveness} cut`;
+
+    return (
+      <ScrollView contentContainerStyle={styles.stepContent} keyboardShouldPersistTaps="handled">
+        <Text style={styles.stepTitle}>Your Plan</Text>
+        <Text style={styles.stepSubtitle}>AI-calculated targets for your profile</Text>
+
+        {/* BMR / TDEE row */}
+        <View style={styles.resultMetricRow}>
+          <View style={styles.resultMetric}>
+            <Text style={styles.resultMetricValue}>{result.bmr.toLocaleString()}</Text>
+            <Text style={styles.resultMetricLabel}>BMR (kcal)</Text>
+          </View>
+          <View style={styles.resultMetricDivider} />
+          <View style={styles.resultMetric}>
+            <Text style={styles.resultMetricValue}>{result.tdee.toLocaleString()}</Text>
+            <Text style={styles.resultMetricLabel}>TDEE (kcal)</Text>
+          </View>
+        </View>
+
+        {/* Macro grid */}
+        <View style={styles.macroGrid}>
+          <View style={[styles.macroCard, { borderColor: colors.primary }]}>
+            <Text style={[styles.macroValue, { color: colors.primary }]}>
+              {result.calories}
+            </Text>
+            <Text style={styles.macroLabel}>Calories</Text>
+          </View>
+          <View style={styles.macroCard}>
+            <Text style={styles.macroValue}>{result.protein}g</Text>
+            <Text style={styles.macroLabel}>Protein</Text>
+          </View>
+          <View style={styles.macroCard}>
+            <Text style={styles.macroValue}>{result.carbs}g</Text>
+            <Text style={styles.macroLabel}>Carbs</Text>
+          </View>
+          <View style={styles.macroCard}>
+            <Text style={styles.macroValue}>{result.fat}g</Text>
+            <Text style={styles.macroLabel}>Fat</Text>
+          </View>
+        </View>
+
+        {/* Collapsible explanation */}
+        <Pressable
+          style={styles.collapsibleHeader}
+          onPress={() => setShowCalc(v => !v)}
+        >
+          <Text style={styles.collapsibleHeaderText}>How was this calculated?</Text>
+          <Text style={styles.collapsibleChevron}>{showCalc ? '▲' : '▼'}</Text>
+        </Pressable>
+        {showCalc && (
+          <View style={styles.collapsibleBody}>
+            <Text style={styles.collapsibleBodyText}>Formula: {formData.bmr_formula}</Text>
+            <Text style={styles.collapsibleBodyText}>
+              BMR {result.bmr} kcal × {ACTIVITY_MULTIPLIERS[activityKey].value} (
+              {ACTIVITY_MULTIPLIERS[activityKey].label}) = TDEE {result.tdee} kcal
+            </Text>
+            <Text style={styles.collapsibleBodyText}>{deficitOrSurplus}</Text>
+          </View>
+        )}
+
+        {/* Action buttons */}
+        <Pressable style={styles.primaryActionBtn} onPress={advanceToStep4}>
+          <Text style={styles.primaryActionBtnText}>Use These Goals</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryActionBtn} onPress={handleRecalculate}>
+          <Text style={styles.secondaryActionBtnText}>Recalculate</Text>
+        </Pressable>
+        <Pressable style={styles.tertiaryActionBtn} onPress={advanceToStep4}>
+          <Text style={styles.tertiaryActionBtnText}>Set My Own Macros</Text>
+        </Pressable>
+
+        <View style={{ height: spacing.xl }} />
+      </ScrollView>
+    );
+  }
+
+  // ── Pre-calculate (activity selector) ───────────────────────────────────────
+  return (
+    <ScrollView contentContainerStyle={styles.stepContent} keyboardShouldPersistTaps="handled">
+      <Text style={styles.stepTitle}>AI Plan</Text>
+      <Text style={styles.stepSubtitle}>How active are you day-to-day?</Text>
+
+      {activityKeys.map(key => {
+        const act = ACTIVITY_MULTIPLIERS[key];
+        const selected = activityKey === key;
+        return (
+          <Pressable
+            key={key}
+            style={[styles.verticalOption, selected && { borderColor: colors.primary }]}
+            onPress={() => setActivityKey(key)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.verticalOptionLabel, selected && { color: colors.primary }]}>
+                {act.label}
+              </Text>
+              <Text style={styles.verticalOptionDesc}>×{act.value} multiplier</Text>
+            </View>
+            <View
+              style={[
+                styles.radioCircle,
+                selected && { borderColor: colors.primary, backgroundColor: colors.primary },
+              ]}
+            />
+          </Pressable>
+        );
+      })}
+
+      <Pressable style={styles.calculateBtn} onPress={handleCalculate}>
+        <Text style={styles.calculateBtnText}>Calculate My Targets</Text>
+      </Pressable>
+
+      <View style={{ height: spacing.xl }} />
+    </ScrollView>
+  );
+}
+
 // ─── Placeholder steps ────────────────────────────────────────────────────────
-function Step2() { return null; }
-function Step3() { return null; }
 function Step4() { return null; }
 function Step5() { return null; }
 function Step6() { return null; }
@@ -655,6 +962,7 @@ export default function OnboardingScreen() {
   const [ageGatePassed, setAgeGatePassed] = useState<boolean | null>(null);
   const [step, setStep] = useState(0);
   const [step1GoalMode, setStep1GoalMode] = useState<'select' | 'details'>('select');
+  const [step3ResultShowing, setStep3ResultShowing] = useState(false);
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM);
   const [suggestedMacros, setSuggestedMacros] = useState<Record<string, number> | null>(null);
   const [confirmedMacros, setConfirmedMacros] = useState<Record<string, number> | null>(null);
@@ -730,6 +1038,8 @@ export default function OnboardingScreen() {
       if (Object.keys(errs).length > 0) { setErrors(errs); return; }
       setErrors({});
     }
+    // Step 3 result state: navigation handled by step-internal buttons
+    if (step === 3 && step3ResultShowing) return;
     setStep(s => Math.min(s + 1, 7));
   }
 
@@ -758,9 +1068,17 @@ export default function OnboardingScreen() {
           />
         );
       case 2:
-        return <Step2 />;
+        return <Step2 formData={formData} setFormData={setFormData} />;
       case 3:
-        return <Step3 />;
+        return (
+          <Step3
+            formData={formData}
+            setFormData={setFormData}
+            setSuggestedMacros={setSuggestedMacros}
+            setStep={setStep}
+            onResultChange={setStep3ResultShowing}
+          />
+        );
       case 4:
         return <Step4 />;
       case 5:
@@ -789,19 +1107,21 @@ export default function OnboardingScreen() {
         ) : (
           <View style={{ flex: 1 }} />
         )}
-        <Pressable
-          style={[styles.nextButton, saving && { opacity: 0.6 }]}
-          onPress={handleNext}
-          disabled={saving}
-        >
-          {saving ? (
-            <ActivityIndicator color="#000" size="small" />
-          ) : (
-            <Text style={styles.nextButtonText}>
-              {step === 7 ? 'Get Started' : 'Next'}
-            </Text>
-          )}
-        </Pressable>
+        {!(step === 3 && step3ResultShowing) && (
+          <Pressable
+            style={[styles.nextButton, saving && { opacity: 0.6 }]}
+            onPress={handleNext}
+            disabled={saving}
+          >
+            {saving ? (
+              <ActivityIndicator color="#000" size="small" />
+            ) : (
+              <Text style={styles.nextButtonText}>
+                {step === 7 ? 'Get Started' : 'Next'}
+              </Text>
+            )}
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -1057,5 +1377,196 @@ const styles = StyleSheet.create({
   },
   dateButton: {
     justifyContent: 'center',
+  },
+  // Step 2 — Diet
+  infoBanner: {
+    backgroundColor: '#14532d',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  infoBannerText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.primary,
+    lineHeight: 20,
+  },
+  dietGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  dietCard: {
+    width: '47.5%',
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  dietCardEmoji: {
+    fontSize: 28,
+    marginBottom: spacing.xs,
+  },
+  dietCardLabel: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  dietCardDesc: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  // Step 3 — AI Plan
+  loadingMsg: {
+    marginTop: spacing.lg,
+    fontSize: 15,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  resultMetricRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
+  },
+  resultMetric: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+  },
+  resultMetricDivider: {
+    width: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+  resultMetricValue: {
+    fontSize: 24,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+  },
+  resultMetricLabel: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  macroGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  macroCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  macroValue: {
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+  },
+  macroLabel: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  collapsibleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    marginBottom: 2,
+  },
+  collapsibleHeaderText: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.textMuted,
+  },
+  collapsibleChevron: {
+    fontSize: 11,
+    color: colors.textMuted,
+  },
+  collapsibleBody: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.sm,
+    padding: spacing.md,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  collapsibleBodyText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  primaryActionBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.md,
+  },
+  primaryActionBtnText: {
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+    color: '#000',
+  },
+  secondaryActionBtn: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  secondaryActionBtnText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+  },
+  tertiaryActionBtn: {
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  tertiaryActionBtnText: {
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+    textDecorationLine: 'underline',
+  },
+  calculateBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.lg,
+  },
+  calculateBtnText: {
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+    color: '#000',
   },
 });

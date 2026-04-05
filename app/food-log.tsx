@@ -13,8 +13,10 @@ import {
   ScrollView,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Swipeable } from 'react-native-gesture-handler';
 import { takePendingBarcode } from '../lib/barcodeState';
+import { takePendingLabel } from '../lib/labelState';
 import {
   BottomSheetModal,
   BottomSheetScrollView,
@@ -75,9 +77,10 @@ const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Late Night'] as co
 type MealType = (typeof MEAL_TYPES)[number];
 
 const SOURCE_CONFIG: Record<FoodSource, { label: string; color: string; bg: string }> = {
-  fatsecret:     { label: 'FS',   color: '#22c55e', bg: '#052e16' },
-  usda:          { label: 'USDA', color: '#60a5fa', bg: '#0c1a2e' },
-  openfoodfacts: { label: 'OFF',  color: '#fb923c', bg: '#1c0800' },
+  fatsecret:     { label: 'FS',    color: '#22c55e', bg: '#052e16' },
+  usda:          { label: 'USDA',  color: '#60a5fa', bg: '#0c1a2e' },
+  openfoodfacts: { label: 'OFF',   color: '#fb923c', bg: '#1c0800' },
+  label:         { label: 'OCR',   color: '#a78bfa', bg: '#1a1030' },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -262,6 +265,7 @@ function FoodDetailSheet({
   const [weightG, setWeightG]       = useState(100);
   const [customInput, setCustomInput] = useState('');
   const [mealType, setMealType]     = useState<MealType>(defaultMealType());
+  const [nameOverride, setNameOverride] = useState('');
 
   const snapPoints    = useMemo(() => ['60%', '92%'], []);
   const renderBackdrop = useCallback(
@@ -277,6 +281,7 @@ function FoodDetailSheet({
       setWeightG(food.servingG > 0 ? Math.round(food.servingG) : 100);
       setCustomInput('');
       setMealType(defaultMealType());
+      setNameOverride(food.source === 'label' ? food.name : '');
     }
   }, [food?.id]);
 
@@ -307,10 +312,11 @@ function FoodDetailSheet({
   const addMutation = useMutation({
     mutationFn: async () => {
       if (!food || !uid) throw new Error('Missing data');
+      const displayName = nameOverride.trim() || food.name;
       const { error } = await supabase.from('meal_logs').insert({
         user_id:              uid,
         date:                 selectedDate,
-        name:                 `${food.name} (${weightG}g)`,
+        name:                 `${displayName} (${weightG}g)`,
         calories:             calcCal,
         protein_g:            calcProtein,
         carbs_g:              calcCarbs,
@@ -347,7 +353,17 @@ function FoodDetailSheet({
           <>
             {/* Header */}
             <View style={styles.sheetHeader}>
-              <Text style={styles.sheetFoodName} numberOfLines={3}>{food.name}</Text>
+              {food.source === 'label' ? (
+                <TextInput
+                  style={[styles.sheetFoodName, styles.sheetNameInput]}
+                  value={nameOverride}
+                  onChangeText={setNameOverride}
+                  placeholder="Item name..."
+                  placeholderTextColor={colors.textMuted}
+                />
+              ) : (
+                <Text style={styles.sheetFoodName} numberOfLines={3}>{food.name}</Text>
+              )}
               <SourceBadge source={food.source} />
             </View>
 
@@ -687,13 +703,20 @@ export default function FoodLogScreen() {
     onError: err => Alert.alert('Error', (err as Error).message),
   });
 
-  // ── Barcode result from scanner ───────────────────────────────────────────────
+  // ── Barcode + label scanner results ───────────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
-      const result = takePendingBarcode();
-      if (result) {
-        setSelectedFood(result);
+      const barcode = takePendingBarcode();
+      if (barcode) {
+        setSelectedFood(barcode);
         // Small delay lets the sheet ref re-attach after navigation
+        setTimeout(() => bottomSheetRef.current?.present(), 150);
+        return;
+      }
+      const label = takePendingLabel();
+      if (label) {
+        setMode('search');
+        setSelectedFood(label);
         setTimeout(() => bottomSheetRef.current?.present(), 150);
       }
     }, []),
@@ -720,6 +743,19 @@ export default function FoodLogScreen() {
         setSearching(false);
       }
     }, 400);
+  }
+
+  // ── Label scanner with daily limit check ──────────────────────────────────────
+  async function handleLabelScan() {
+    const today = new Date().toLocaleDateString('en-CA');
+    const key   = `label_scans_${today}`;
+    const val   = await AsyncStorage.getItem(key);
+    const count = val ? parseInt(val) : 0;
+    if (count >= 10) {
+      Alert.alert('Daily Limit Reached', "You've used all 10 label scans for today. Try again tomorrow.");
+      return;
+    }
+    router.push('/label-scanner');
   }
 
   // ── Open detail sheet ─────────────────────────────────────────────────────────
@@ -889,6 +925,9 @@ export default function FoodLogScreen() {
               returnKeyType="search"
               clearButtonMode="while-editing"
             />
+            <Pressable style={styles.iconBtn} onPress={handleLabelScan}>
+              <Ionicons name="scan-outline" size={24} color={colors.text} />
+            </Pressable>
             <Pressable style={styles.iconBtn} onPress={() => router.push('/barcode')}>
               <Ionicons name="barcode-outline" size={24} color={colors.text} />
             </Pressable>
@@ -1350,6 +1389,14 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: 'Inter_700Bold',
     color: colors.text,
+  },
+  sheetNameInput: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   sheetLabel: {
     fontSize: 11,

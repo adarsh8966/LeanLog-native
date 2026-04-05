@@ -13,6 +13,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "plugins": [
+      "react-native-vision-camera"
+    ],
     "ios": {
       "supportsTablet": true
     },

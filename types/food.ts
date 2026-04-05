@@ -1,6 +1,6 @@
 // ─── Food search result ───────────────────────────────────────────────────────
 
-export type FoodSource = 'fatsecret' | 'usda' | 'openfoodfacts';
+export type FoodSource = 'fatsecret' | 'usda' | 'openfoodfacts' | 'label';
 
 /**
  * Normalised per-100g result returned by all search functions.

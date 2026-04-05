@@ -21,6 +21,7 @@
     "expo": "~54.0.33",
     "expo-camera": "^55.0.13",
     "expo-constants": "^55.0.9",
+    "expo-dev-client": "^55.0.22",
     "expo-font": "^55.0.4",
     "expo-linking": "^55.0.9",
     "expo-router": "^55.0.8",
@@ -37,8 +38,11 @@
     "react-native-screens": "^4.24.0",
     "react-native-svg": "^15.15.4",
     "react-native-url-polyfill": "^3.0.0",
+    "react-native-vision-camera": "^4.7.3",
     "react-native-web": "^0.21.2",
-    "react-native-worklets": "^0.8.1"
+    "react-native-worklets": "^0.8.1",
+    "react-native-worklets-core": "^1.6.3",
+    "vision-camera-ocr": "^1.0.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",

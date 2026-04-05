@@ -9,9 +9,12 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  Modal,
+  ScrollView,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Swipeable } from 'react-native-gesture-handler';
+import { takePendingBarcode } from '../lib/barcodeState';
 import {
   BottomSheetModal,
   BottomSheetScrollView,
@@ -45,6 +48,25 @@ type UserProfile = {
   protein_goal?: number | null;
   carbs_goal?: number | null;
   fat_goal?: number | null;
+};
+
+type MealTemplateItem = {
+  id: string;
+  template_id: string;
+  name: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  meal_type: string;
+};
+
+type MealTemplate = {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+  meal_template_items: MealTemplateItem[];
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -450,6 +472,9 @@ export default function FoodLogScreen() {
   const [searchResults, setSearchResults] = useState<FoodResult[]>([]);
   const [searching, setSearching]       = useState(false);
   const [selectedFood, setSelectedFood] = useState<FoodResult | null>(null);
+  // Save-template modal
+  const [saveTemplateVisible, setSaveTemplateVisible] = useState(false);
+  const [templateNameInput, setTemplateNameInput]     = useState('');
 
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -528,6 +553,151 @@ export default function FoodLogScreen() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['meal_logs', uid, selectedDate] }),
   });
+
+  // ── Yesterday (for Copy Yesterday) ───────────────────────────────────────────
+  const yesterday = useMemo(() => {
+    const [y, m, d] = today.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() - 1);
+    return getLocalDateString(date);
+  }, [today]);
+
+  const { data: yesterdayLogs = [] } = useQuery<MealLog[]>({
+    queryKey: ['meal_logs', uid, yesterday],
+    enabled:  !!uid && selectedDate === today,
+    queryFn:  async () => {
+      const { data, error } = await supabase
+        .from('meal_logs')
+        .select('*')
+        .eq('user_id', uid!)
+        .eq('date', yesterday)
+        .order('logged_at', { ascending: true });
+      if (error) throw error;
+      return data as MealLog[];
+    },
+  });
+
+  const copyYesterdayMutation = useMutation({
+    mutationFn: async () => {
+      if (!uid || yesterdayLogs.length === 0) return;
+      const { error } = await supabase.from('meal_logs').insert(
+        yesterdayLogs.map(item => ({
+          user_id:     uid,
+          date:        today,
+          name:        item.name,
+          calories:    item.calories,
+          protein_g:   item.protein_g,
+          carbs_g:     item.carbs_g,
+          fat_g:       item.fat_g,
+          meal_type:   item.meal_type,
+          logged_hour: 12,
+          logged_at:   `${today}T12:00:00`,
+        })),
+      );
+      if (error) throw error;
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['meal_logs', uid, today] }),
+    onError: err => Alert.alert('Error', (err as Error).message),
+  });
+
+  // ── Templates ─────────────────────────────────────────────────────────────────
+  const { data: templates = [], refetch: refetchTemplates } = useQuery<MealTemplate[]>({
+    queryKey: ['meal_templates', uid],
+    enabled:  !!uid && mode === 'search',
+    queryFn:  async () => {
+      const { data, error } = await supabase
+        .from('meal_templates')
+        .select('*, meal_template_items(*)')
+        .eq('user_id', uid!)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as MealTemplate[];
+    },
+  });
+
+  const applyTemplateMutation = useMutation({
+    mutationFn: async (template: MealTemplate) => {
+      if (!uid) return;
+      const { error } = await supabase.from('meal_logs').insert(
+        template.meal_template_items.map(item => ({
+          user_id:     uid,
+          date:        selectedDate,
+          name:        item.name,
+          calories:    item.calories,
+          protein_g:   item.protein_g,
+          carbs_g:     item.carbs_g,
+          fat_g:       item.fat_g,
+          meal_type:   item.meal_type,
+          logged_hour: 12,
+          logged_at:   selectedDate === today
+                         ? new Date().toISOString()
+                         : `${selectedDate}T12:00:00`,
+        })),
+      );
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['meal_logs', uid, selectedDate] });
+      setMode('log');
+    },
+    onError: err => Alert.alert('Error', (err as Error).message),
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (templateId: string) => {
+      // Delete items first (in case no cascade), then template
+      await supabase.from('meal_template_items').delete().eq('template_id', templateId);
+      const { error } = await supabase.from('meal_templates').delete().eq('id', templateId);
+      if (error) throw error;
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['meal_templates', uid] }),
+    onError: err => Alert.alert('Error', (err as Error).message),
+  });
+
+  const saveTemplateMutation = useMutation({
+    mutationFn: async (name: string) => {
+      if (!uid || mealLogs.length === 0) throw new Error('No items to save');
+      const { data: tmpl, error: tmplErr } = await supabase
+        .from('meal_templates')
+        .insert({ user_id: uid, name })
+        .select()
+        .single();
+      if (tmplErr) throw tmplErr;
+      const { error: itemsErr } = await supabase.from('meal_template_items').insert(
+        mealLogs.map(log => ({
+          template_id: tmpl.id,
+          name:        log.name,
+          calories:    log.calories,
+          protein_g:   log.protein_g,
+          carbs_g:     log.carbs_g,
+          fat_g:       log.fat_g,
+          meal_type:   log.meal_type,
+        })),
+      );
+      if (itemsErr) throw itemsErr;
+    },
+    onSuccess: () => {
+      setSaveTemplateVisible(false);
+      setTemplateNameInput('');
+      queryClient.invalidateQueries({ queryKey: ['meal_templates', uid] });
+      Alert.alert('Saved', 'Template saved successfully.');
+    },
+    onError: err => Alert.alert('Error', (err as Error).message),
+  });
+
+  // ── Barcode result from scanner ───────────────────────────────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      const result = takePendingBarcode();
+      if (result) {
+        setSelectedFood(result);
+        // Small delay lets the sheet ref re-attach after navigation
+        setTimeout(() => bottomSheetRef.current?.present(), 150);
+      }
+    }, []),
+  );
 
   // ── Date navigation ───────────────────────────────────────────────────────────
   function navigateDay(dir: -1 | 1) {
@@ -622,8 +792,23 @@ export default function FoodLogScreen() {
               </Pressable>
             </View>
 
-            {/* Spacer to balance back arrow */}
-            <View style={{ width: 40 }} />
+            {/* Save as template */}
+            <Pressable
+              style={styles.iconBtn}
+              onPress={() => {
+                if (mealLogs.length === 0) {
+                  Alert.alert('No items', 'Log some food first to save a template.');
+                } else {
+                  setSaveTemplateVisible(true);
+                }
+              }}
+            >
+              <Ionicons
+                name="bookmark-outline"
+                size={22}
+                color={mealLogs.length > 0 ? colors.text : colors.border}
+              />
+            </Pressable>
           </View>
 
           {/* ── Macro bar ── */}
@@ -645,6 +830,30 @@ export default function FoodLogScreen() {
                   onDelete={id => deleteMutation.mutate(id)}
                 />
               )}
+              ListFooterComponent={
+                selectedDate === today && yesterdayLogs.length > 0 ? (
+                  <Pressable
+                    style={[
+                      styles.copyYesterdayBtn,
+                      copyYesterdayMutation.isPending && { opacity: 0.6 },
+                    ]}
+                    onPress={() => copyYesterdayMutation.mutate()}
+                    disabled={copyYesterdayMutation.isPending}
+                  >
+                    {copyYesterdayMutation.isPending ? (
+                      <ActivityIndicator color={colors.primary} size="small" />
+                    ) : (
+                      <>
+                        <Ionicons name="copy-outline" size={16} color={colors.primary} />
+                        <Text style={styles.copyYesterdayText}>
+                          Copy Yesterday ({yesterdayLogs.length} item
+                          {yesterdayLogs.length !== 1 ? 's' : ''})
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+                ) : null
+              }
               contentContainerStyle={styles.listContent}
               keyboardShouldPersistTaps="handled"
             />
@@ -680,6 +889,9 @@ export default function FoodLogScreen() {
               returnKeyType="search"
               clearButtonMode="while-editing"
             />
+            <Pressable style={styles.iconBtn} onPress={() => router.push('/barcode')}>
+              <Ionicons name="barcode-outline" size={24} color={colors.text} />
+            </Pressable>
           </View>
 
           {searching ? (
@@ -687,20 +899,21 @@ export default function FoodLogScreen() {
               <ActivityIndicator color={colors.primary} />
             </View>
           ) : searchQuery.trim() === '' ? (
-            /* ── Recent ── */
-            <FlatList
-              data={recentLogs}
-              keyExtractor={item => item.id}
-              ListHeaderComponent={
-                recentLogs.length > 0
-                  ? <Text style={styles.sectionHeader}>Recent</Text>
-                  : null
-              }
-              ListEmptyComponent={
+            /* ── Recent + Templates ── */
+            <ScrollView
+              contentContainerStyle={styles.listContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* Recent */}
+              {recentLogs.length > 0 && (
+                <Text style={styles.sectionHeader}>Recent</Text>
+              )}
+              {recentLogs.length === 0 && templates.length === 0 && (
                 <Text style={styles.emptyText}>Start typing to search foods</Text>
-              }
-              renderItem={({ item }) => (
+              )}
+              {recentLogs.map(item => (
                 <Pressable
+                  key={item.id}
                   style={styles.resultRow}
                   onPress={() => openFoodDetail(recentToFoodResult(item))}
                 >
@@ -714,10 +927,49 @@ export default function FoodLogScreen() {
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                 </Pressable>
+              ))}
+
+              {/* Templates */}
+              {templates.length > 0 && (
+                <Text style={styles.sectionHeader}>Templates</Text>
               )}
-              contentContainerStyle={styles.listContent}
-              keyboardShouldPersistTaps="handled"
-            />
+              {templates.map(tmpl => {
+                const totalCal = tmpl.meal_template_items.reduce(
+                  (s, i) => s + (i.calories || 0), 0,
+                );
+                return (
+                  <Pressable
+                    key={tmpl.id}
+                    style={styles.resultRow}
+                    onPress={() => applyTemplateMutation.mutate(tmpl)}
+                    onLongPress={() => {
+                      Alert.alert(
+                        'Delete Template',
+                        `Delete "${tmpl.name}"?`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Delete',
+                            style: 'destructive',
+                            onPress: () => deleteTemplateMutation.mutate(tmpl.id),
+                          },
+                        ],
+                      );
+                    }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.resultName}>{tmpl.name}</Text>
+                      <Text style={styles.resultMacro}>
+                        {tmpl.meal_template_items.length} item
+                        {tmpl.meal_template_items.length !== 1 ? 's' : ''} ·{' '}
+                        {Math.round(totalCal)} kcal
+                      </Text>
+                    </View>
+                    <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           ) : (
             /* ── Search results ── */
             <FlatList
@@ -744,6 +996,63 @@ export default function FoodLogScreen() {
         selectedDate={selectedDate}
         onSuccess={() => setMode('log')}
       />
+
+      {/* ── Save Template modal ── */}
+      <Modal
+        visible={saveTemplateVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSaveTemplateVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setSaveTemplateVisible(false)}
+        >
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Save as Template</Text>
+            <Text style={styles.modalSub}>
+              Saves all {mealLogs.length} logged item
+              {mealLogs.length !== 1 ? 's' : ''} from today.
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              value={templateNameInput}
+              onChangeText={setTemplateNameInput}
+              placeholder="Template name (e.g. High Protein Day)"
+              placeholderTextColor={colors.textMuted}
+              autoFocus
+              maxLength={50}
+            />
+            <View style={styles.modalButtons}>
+              <Pressable
+                style={styles.modalCancelBtn}
+                onPress={() => {
+                  setSaveTemplateVisible(false);
+                  setTemplateNameInput('');
+                }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalSaveBtn,
+                  (!templateNameInput.trim() || saveTemplateMutation.isPending) && { opacity: 0.5 },
+                ]}
+                onPress={() => {
+                  if (templateNameInput.trim()) saveTemplateMutation.mutate(templateNameInput.trim());
+                }}
+                disabled={!templateNameInput.trim() || saveTemplateMutation.isPending}
+              >
+                {saveTemplateMutation.isPending ? (
+                  <ActivityIndicator color="#000" size="small" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Save</Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1169,6 +1478,94 @@ const styles = StyleSheet.create({
   },
   addBtnText: {
     fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+    color: '#000',
+  },
+
+  // ── Copy Yesterday ────────────────────────────────────────────────────────────
+  copyYesterdayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderStyle: 'dashed',
+  },
+  copyYesterdayText: {
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.primary,
+  },
+
+  // ── Save Template modal ───────────────────────────────────────────────────────
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.lg,
+    padding: spacing.xl,
+    width: '100%',
+    gap: spacing.md,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    color: colors.text,
+  },
+  modalSub: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: colors.textMuted,
+  },
+  modalInput: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    color: colors.text,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 15,
+    fontFamily: 'Inter_600SemiBold',
+    color: colors.text,
+  },
+  modalSaveBtn: {
+    flex: 2,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+  },
+  modalSaveText: {
+    fontSize: 15,
     fontFamily: 'Inter_700Bold',
     color: '#000',
   },

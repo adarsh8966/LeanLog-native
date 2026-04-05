@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,10 +17,15 @@ import { colors, spacing, borderRadius } from '../../lib/theme';
 import MacroRings from '../../components/MacroRings';
 import BentoWaterCard from '../../components/BentoWaterCard';
 import BentoSuppsCard from '../../components/BentoSuppsCard';
+import { Ionicons } from '@expo/vector-icons';
 
 // ── Date helper (no toISOString) ──────────────────────────────────────────────
 function todayStr() {
   return new Date().toLocaleDateString('en-CA');
+}
+
+function getLocalDateString(date?: Date): string {
+  return (date ?? new Date()).toLocaleDateString('en-CA');
 }
 
 // ── Pure JS engines ────────────────────────────────────────────────────────────
@@ -131,6 +136,48 @@ function getInsight(
   return { text: `Exceeded goal by ${Math.abs(diff)} kcal. Adjust tomorrow.`, emoji: '📊' };
 }
 
+type DailyBrief = {
+  message: string;
+  has_data: boolean;
+};
+
+async function fetchDailyBrief(
+  uid: string,
+  session: { access_token: string }
+): Promise<DailyBrief | null> {
+  const today = getLocalDateString();
+  const cacheKey = `coaching_brief_${today}`;
+
+  // Check cache first
+  const cached = await AsyncStorage.getItem(cacheKey);
+  if (cached) return JSON.parse(cached) as DailyBrief;
+
+  // Compute yesterday
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = getLocalDateString(yesterday);
+
+  // Call Edge Function
+  const response = await fetch(
+    `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/daily-coaching-brief`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ yesterday: yesterdayStr }),
+    }
+  );
+
+  if (!response.ok) return null;
+  const data = await response.json() as DailyBrief;
+
+  // Cache it
+  await AsyncStorage.setItem(cacheKey, JSON.stringify(data));
+  return data;
+}
+
 const MOOD_EMOJI: Record<number, string> = { 1: '😞', 2: '😕', 3: '😐', 4: '🙂', 5: '😄' };
 
 function energyLabel(level?: number) {
@@ -145,16 +192,13 @@ export default function Dashboard() {
   const today = todayStr();
   const xpBarWidth = useAnimatedValue(0);
 
-  // ── onboarding check ──────────────────────────────────────────────────────
-  useEffect(() => {
-    AsyncStorage.getItem('onboarding_complete').then(val => {
-      if (!val) {
-        router.replace('/onboarding');
-      }
-    });
-  }, []);
+  // ── Daily coaching brief state ────────────────────────────────────────────
+  const [dailyBrief, setDailyBrief] = useState<DailyBrief | null>(null);
+  const [briefLoading, setBriefLoading] = useState(true);
+  const skeletonOpacity = useAnimatedValue(0.3);
+  const skeletonAnimRef = useRef<ReturnType<typeof Animated.loop> | null>(null);
 
-  // ── auth ──────────────────────────────────────────────────────────────────
+  // ── auth (must come before effects that use uid) ──────────────────────────
   const { data: user } = useQuery({
     queryKey: ['auth_user'],
     queryFn: async () => {
@@ -164,6 +208,46 @@ export default function Dashboard() {
     },
   });
   const uid = user?.id;
+
+  // ── onboarding check ──────────────────────────────────────────────────────
+  useEffect(() => {
+    AsyncStorage.getItem('onboarding_complete').then(val => {
+      if (!val) {
+        router.replace('/onboarding');
+      }
+    });
+  }, []);
+
+  // ── Skeleton pulse animation ──────────────────────────────────────────────
+  useEffect(() => {
+    if (briefLoading) {
+      skeletonAnimRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(skeletonOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+          Animated.timing(skeletonOpacity, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+        ])
+      );
+      skeletonAnimRef.current.start();
+    } else {
+      skeletonAnimRef.current?.stop();
+    }
+  }, [briefLoading]);
+
+  // ── Fetch daily coaching brief once on mount (after auth) ─────────────────
+  useEffect(() => {
+    if (!uid) return;
+    setBriefLoading(true);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        setBriefLoading(false);
+        return;
+      }
+      fetchDailyBrief(uid, session)
+        .then(setDailyBrief)
+        .catch(() => setDailyBrief(null))
+        .finally(() => setBriefLoading(false));
+    });
+  }, [uid]);
 
   // ── 10 queries ────────────────────────────────────────────────────────────
 
@@ -494,6 +578,24 @@ export default function Dashboard() {
           </View>
         )}
       </View>
+
+      {/* ──────────────────── Daily Coaching Brief ──────────────────── */}
+      {briefLoading ? (
+        <View style={styles.briefCard}>
+          <Animated.View style={[styles.briefSkeletonLine, { opacity: skeletonOpacity }]} />
+          <Animated.View style={[styles.briefSkeletonLineShort, { opacity: skeletonOpacity }]} />
+        </View>
+      ) : dailyBrief ? (
+        <View style={styles.briefCard}>
+          <View style={styles.briefHeader}>
+            <Ionicons name="sparkles-outline" size={14} color="#22c55e" />
+            <Text style={styles.briefHeaderLabel}>Your Coach</Text>
+          </View>
+          <Text style={[styles.briefText, !dailyBrief.has_data && styles.briefTextMuted]}>
+            {dailyBrief.message}
+          </Text>
+        </View>
+      ) : null}
 
       {/* ──────────────────── Section 3: Calorie Donut ─────────────────── */}
       <View style={[styles.card, styles.centeredCard]}>
@@ -1114,6 +1216,51 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     color: colors.textMuted,
+  },
+
+  // Daily Coaching Brief card
+  briefCard: {
+    backgroundColor: '#111111',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: spacing.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: '#22c55e',
+  },
+  briefHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  briefHeaderLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    color: '#888888',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  briefText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: '#ffffff',
+    lineHeight: 22,
+  },
+  briefTextMuted: {
+    color: '#888888',
+  },
+  briefSkeletonLine: {
+    height: 12,
+    backgroundColor: '#333333',
+    borderRadius: 6,
+    marginBottom: 10,
+    width: '100%',
+  },
+  briefSkeletonLineShort: {
+    height: 12,
+    backgroundColor: '#333333',
+    borderRadius: 6,
+    width: '70%',
   },
 
   // FAB

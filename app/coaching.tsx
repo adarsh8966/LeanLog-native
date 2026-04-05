@@ -9,7 +9,12 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { colors, spacing, borderRadius } from '../lib/theme';
@@ -47,6 +52,14 @@ function statusStyle(status?: string) {
   if (status === 'declined') return { bg: '#ef444418', border: '#ef444455', color: '#ef4444', label: 'Declined' };
   if (status === 'modified') return { bg: '#818cf818', border: '#818cf855', color: '#818cf8', label: 'Modified' };
   return                            { bg: '#6b728018', border: '#6b728055', color: '#6b7280', label: 'Pending' };
+}
+
+function fmtTime(iso: string) {
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '';
+  }
 }
 
 function formatGoals(cal?: number, p?: number, c?: number, f?: number) {
@@ -134,6 +147,41 @@ const QUICK_REPLIES = [
   'Keep it the same',
 ];
 
+// ── Typing indicator ──────────────────────────────────────────────────────────
+function TypingDots() {
+  const dots = [
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+  ];
+
+  useEffect(() => {
+    const anims = dots.map((dot, i) => {
+      const anim = Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 160),
+          Animated.timing(dot, { toValue: 1, duration: 280, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0.2, duration: 280, useNativeDriver: true }),
+        ])
+      );
+      anim.start();
+      return anim;
+    });
+    return () => anims.forEach(a => a.stop());
+  }, []);
+
+  return (
+    <View style={{ flexDirection: 'row', gap: 5, padding: 12, alignSelf: 'flex-start' }}>
+      {dots.map((dot, i) => (
+        <Animated.View
+          key={i}
+          style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#888888', opacity: dot }}
+        />
+      ))}
+    </View>
+  );
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 export default function Coaching() {
   const qc = useQueryClient();
@@ -146,6 +194,13 @@ export default function Coaching() {
   const [draftRecommendation, setDraftRecommendation] = useState<DraftRecommendation | null>(null);
   const [expandedReports, setExpandedReports] = useState<Record<string, boolean>>({});
   const [howOpen, setHowOpen] = useState(false);
+
+  // ── Chat tab state ──────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<'report' | 'chat'>('report');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
   // auto-clear toast
   useEffect(() => {
@@ -209,6 +264,29 @@ export default function Coaching() {
       return data as UserProfile | null;
     },
   });
+
+  const { data: chatHistory = [] } = useQuery<ChatMessage[]>({
+    queryKey: ['coaching-chat', uid],
+    enabled: !!uid,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('coaching_history')
+        .select('role, content, created_at')
+        .eq('user_id', uid!)
+        .eq('type', 'chat')
+        .order('created_at', { ascending: true })
+        .limit(50);
+      if (error) throw error;
+      return data as ChatMessage[];
+    },
+  });
+
+  // Sync chat history into local state on first load
+  useEffect(() => {
+    if (chatHistory.length > 0 && messages.length === 0) {
+      setMessages(chatHistory);
+    }
+  }, [chatHistory]);
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const invalidate = () => {
@@ -373,6 +451,51 @@ export default function Coaching() {
     setExpandedReports(prev => ({ ...prev, [id]: !prev[id] }));
   }
 
+  async function sendMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || isTyping) return;
+
+    const userMsg: ChatMessage = {
+      role: 'user',
+      content: trimmed,
+      created_at: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setIsTyping(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('No session');
+
+      const response = await fetch(
+        `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/coaching-chat`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ message: trimmed }),
+        }
+      );
+
+      const data = await response.json();
+      if (data.reply) {
+        const assistantMsg: ChatMessage = {
+          role: 'assistant',
+          content: data.reply,
+          created_at: new Date().toISOString(),
+        };
+        setMessages(prev => [...prev, assistantMsg]);
+      }
+    } catch (err) {
+      console.error('Chat error:', err);
+    } finally {
+      setIsTyping(false);
+    }
+  }
+
   // ── Loading / Empty ──────────────────────────────────────────────────────────
   if (reportsLoading) {
     return (
@@ -413,6 +536,24 @@ export default function Coaching() {
         </View>
       )}
 
+      {/* ── Tab Bar ── */}
+      <View style={styles.tabBar}>
+        {(['report', 'chat'] as const).map(tab => (
+          <TouchableOpacity
+            key={tab}
+            style={styles.tab}
+            onPress={() => setActiveTab(tab)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+              {tab === 'report' ? 'Report' : 'Chat'}
+            </Text>
+            {activeTab === tab && <View style={styles.tabUnderline} />}
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {activeTab === 'report' ? (
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.content}
@@ -772,6 +913,72 @@ export default function Coaching() {
 
         <View style={{ height: spacing.xl }} />
       </ScrollView>
+      ) : (
+      /* ── Chat Tab ── */
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={[...messages].reverse()}
+          inverted
+          keyExtractor={(_, i) => String(i)}
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.chatListContent}
+          ListHeaderComponent={isTyping ? (
+            <View style={styles.newBubbleAssistant}>
+              <TypingDots />
+            </View>
+          ) : null}
+          ListEmptyComponent={!isTyping ? (
+            <View style={styles.chatEmpty}>
+              <Text style={styles.chatEmptyText}>
+                Ask your coach anything about your goals, nutrition, or progress.
+              </Text>
+            </View>
+          ) : null}
+          renderItem={({ item }) => (
+            <View style={item.role === 'user' ? styles.msgWrapUser : styles.msgWrapAssistant}>
+              <View style={[styles.newBubble, item.role === 'user' ? styles.newBubbleUser : styles.newBubbleAssistant]}>
+                <Text style={[styles.newBubbleText, item.role === 'user' ? styles.newBubbleTextUser : styles.newBubbleTextAssistant]}>
+                  {item.content}
+                </Text>
+              </View>
+              {item.created_at ? (
+                <Text style={[styles.msgTimestamp, item.role === 'user' && styles.msgTimestampRight]}>
+                  {fmtTime(item.created_at)}
+                </Text>
+              ) : null}
+            </View>
+          )}
+        />
+
+        {/* Input bar */}
+        <View style={styles.chatInputBar}>
+          <TextInput
+            style={styles.chatInputNew}
+            placeholder="Message your coach..."
+            placeholderTextColor="#888888"
+            value={input}
+            onChangeText={setInput}
+            multiline
+            maxHeight={88}
+            editable={!isTyping}
+            returnKeyType="default"
+          />
+          <TouchableOpacity
+            style={[styles.chatSendBtn, (!input.trim() || isTyping) && styles.chatSendBtnDisabled]}
+            onPress={() => sendMessage(input)}
+            disabled={!input.trim() || isTyping}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-up" size={18} color={(!input.trim() || isTyping) ? '#555555' : '#000000'} />
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+      )}
     </View>
   );
 }
@@ -1253,6 +1460,129 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     lineHeight: 20,
     marginTop: spacing.md,
+  },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 14,
+    position: 'relative',
+  },
+  tabText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: '#888888',
+  },
+  tabTextActive: {
+    color: '#ffffff',
+  },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: 0,
+    left: '20%',
+    right: '20%',
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#22c55e',
+  },
+
+  // Chat tab
+  chatListContent: {
+    padding: spacing.md,
+    flexGrow: 1,
+  },
+  chatEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xl * 2,
+  },
+  chatEmptyText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    color: '#888888',
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  msgWrapUser: {
+    alignItems: 'flex-end',
+    marginBottom: spacing.sm,
+  },
+  msgWrapAssistant: {
+    alignItems: 'flex-start',
+    marginBottom: spacing.sm,
+  },
+  newBubble: {
+    maxWidth: '80%',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  newBubbleUser: {
+    backgroundColor: '#22c55e',
+  },
+  newBubbleAssistant: {
+    backgroundColor: '#1a1a1a',
+  },
+  newBubbleText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  newBubbleTextUser: {
+    color: '#000000',
+  },
+  newBubbleTextAssistant: {
+    color: '#ffffff',
+  },
+  msgTimestamp: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: '#888888',
+    marginTop: 4,
+  },
+  msgTimestampRight: {
+    textAlign: 'right',
+  },
+  chatInputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.sm,
+    padding: spacing.md,
+    paddingBottom: Platform.OS === 'ios' ? spacing.md : spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  chatInputNew: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    color: '#ffffff',
+    backgroundColor: '#111111',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  chatSendBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatSendBtnDisabled: {
+    backgroundColor: '#1f2937',
   },
 
   // Early check-in

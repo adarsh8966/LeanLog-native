@@ -9,7 +9,10 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  Modal,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { Swipeable } from 'react-native-gesture-handler';
 import {
@@ -53,10 +56,16 @@ const MEAL_TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Late Night'] as co
 type MealType = (typeof MEAL_TYPES)[number];
 
 const SOURCE_CONFIG: Record<FoodSource, { label: string; color: string; bg: string }> = {
-  fatsecret:     { label: 'FS',   color: '#22c55e', bg: '#052e16' },
-  usda:          { label: 'USDA', color: '#60a5fa', bg: '#0c1a2e' },
-  openfoodfacts: { label: 'OFF',  color: '#fb923c', bg: '#1c0800' },
+  fatsecret:     { label: 'FS',       color: '#22c55e', bg: '#052e16' },
+  usda:          { label: 'USDA',     color: '#60a5fa', bg: '#0c1a2e' },
+  openfoodfacts: { label: 'OFF',      color: '#fb923c', bg: '#1c0800' },
+  meal_photo:    { label: 'AI Photo', color: '#8b5cf6', bg: '#1a0a2e' },
 };
+
+const SCAN_LIMIT = 10;
+function scanLimitKey(): string {
+  return `label_scans_${new Date().toLocaleDateString('en-CA')}`;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -329,6 +338,22 @@ function FoodDetailSheet({
               <SourceBadge source={food.source} />
             </View>
 
+            {/* AI estimate note (meal_photo only) */}
+            {food.source === 'meal_photo' && food.notes && (
+              <Text style={[
+                styles.aiNote,
+                {
+                  color: food.confidence === 'high'
+                    ? '#22c55e'
+                    : food.confidence === 'medium'
+                    ? '#f59e0b'
+                    : '#ef4444',
+                },
+              ]}>
+                AI estimate · {food.notes} · Adjust macros as needed
+              </Text>
+            )}
+
             {/* Serving chips */}
             <Text style={styles.sheetLabel}>
               {'Serving size'}
@@ -451,6 +476,14 @@ export default function FoodLogScreen() {
   const [searching, setSearching]       = useState(false);
   const [selectedFood, setSelectedFood] = useState<FoodResult | null>(null);
 
+  // Meal photo camera state
+  const [showMealCamera, setShowMealCamera]   = useState(false);
+  const [mealCameraRef, setMealCameraRef]     = useState<InstanceType<typeof CameraView> | null>(null);
+  const [isMealProcessing, setIsMealProcessing] = useState(false);
+  const [pendingFood, setPendingFood]         = useState<FoodResult | null>(null);
+
+  const [permission, requestPermission] = useCameraPermissions();
+
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -556,6 +589,104 @@ export default function FoodLogScreen() {
   function openFoodDetail(food: FoodResult) {
     setSelectedFood(food);
     bottomSheetRef.current?.present();
+  }
+
+  // pendingFood: set by meal photo flow; effect defers sheet open until
+  // the camera Modal has finished closing
+  useEffect(() => {
+    if (pendingFood) {
+      openFoodDetail(pendingFood);
+      setPendingFood(null);
+    }
+  }, [pendingFood]);
+
+  // ── Meal photo handlers ───────────────────────────────────────────────────────
+
+  async function handleMealPhoto() {
+    if (!permission?.granted) {
+      const result = await requestPermission();
+      if (!result.granted) {
+        Alert.alert('Camera permission required', 'Please allow camera access in Settings.');
+        return;
+      }
+    }
+    setShowMealCamera(true);
+  }
+
+  async function handleCaptureMeal() {
+    if (!mealCameraRef) return;
+    setIsMealProcessing(true);
+
+    try {
+      // Check daily scan limit (shared with label scans)
+      const key   = scanLimitKey();
+      const raw   = await AsyncStorage.getItem(key);
+      const count = raw ? parseInt(raw, 10) : 0;
+      if (count >= SCAN_LIMIT) {
+        Alert.alert('Daily limit reached', 'You have used all 10 AI scans for today.');
+        setShowMealCamera(false);
+        return;
+      }
+
+      // Take photo
+      const photo = await mealCameraRef.takePictureAsync({
+        quality: 0.7,
+        base64: true,
+      });
+
+      setShowMealCamera(false);
+
+      // Call meal-vision Edge Function
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/meal-vision`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: photo.base64,
+            mediaType: 'image/jpeg',
+          }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (result.error) {
+        Alert.alert('Could not identify food', result.error);
+        return;
+      }
+
+      // Increment scan counter
+      await AsyncStorage.setItem(key, String(count + 1));
+
+      // Build FoodResult — treat AI estimate as the full serving (servingG=100,
+      // so the FoodDetailSheet's default 1× chip shows the exact AI estimate)
+      const foodResult: FoodResult = {
+        id:                 `meal_photo_${Date.now()}`,
+        name:               result.name,
+        calories100g:       Math.round(result.calories),
+        protein100g:        parseFloat((result.protein as number).toFixed(1)),
+        carbs100g:          parseFloat((result.carbs as number).toFixed(1)),
+        fat100g:            parseFloat((result.fat as number).toFixed(1)),
+        servingG:           100,
+        householdServing:   'As served (AI estimate)',
+        source:             'meal_photo',
+        fatsecretFoodId:    null,
+        fatsecretServingId: null,
+        confidence:         result.confidence,
+        notes:              result.notes,
+      };
+
+      // Defer sheet open until after Modal close animation
+      setPendingFood(foodResult);
+
+    } catch (err) {
+      Alert.alert('Error', 'Failed to process photo. Please try again.');
+      console.error('Meal photo error:', err);
+    } finally {
+      setIsMealProcessing(false);
+    }
   }
 
   // ── Group logs by meal type ───────────────────────────────────────────────────
@@ -670,6 +801,21 @@ export default function FoodLogScreen() {
             >
               <Ionicons name="arrow-back" size={24} color={colors.text} />
             </Pressable>
+
+            {/* Camera icon — meal photo recognition */}
+            <Pressable
+              style={styles.iconBtn}
+              onPress={handleMealPhoto}
+              accessibilityLabel="Scan meal photo"
+            >
+              <Ionicons name="camera-outline" size={24} color={colors.text} />
+            </Pressable>
+
+            {/* Barcode icon — label scanner (future) */}
+            <Pressable style={[styles.iconBtn, { opacity: 0.35 }]} disabled>
+              <Ionicons name="scan-outline" size={24} color={colors.text} />
+            </Pressable>
+
             <TextInput
               style={styles.searchInput}
               value={searchQuery}
@@ -744,6 +890,52 @@ export default function FoodLogScreen() {
         selectedDate={selectedDate}
         onSuccess={() => setMode('log')}
       />
+
+      {/* ── Meal photo camera modal ── */}
+      <Modal
+        visible={showMealCamera}
+        animationType="slide"
+        onRequestClose={() => setShowMealCamera(false)}
+      >
+        <View style={styles.cameraContainer}>
+          <CameraView
+            style={styles.cameraView}
+            facing="back"
+            ref={setMealCameraRef}
+          />
+
+          {/* Close button */}
+          <Pressable
+            style={styles.cameraCloseBtn}
+            onPress={() => setShowMealCamera(false)}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </Pressable>
+
+          {/* Capture overlay */}
+          <View style={styles.cameraBottomOverlay}>
+            <Text style={styles.cameraHint}>Point camera at your meal</Text>
+            <Pressable
+              style={[
+                styles.captureBtn,
+                isMealProcessing && { opacity: 0.5 },
+              ]}
+              onPress={handleCaptureMeal}
+              disabled={isMealProcessing}
+            >
+              <View style={styles.captureBtnInner} />
+            </Pressable>
+          </View>
+
+          {/* Processing overlay */}
+          {isMealProcessing && (
+            <View style={styles.processingOverlay}>
+              <ActivityIndicator color="#fff" size="large" />
+              <Text style={styles.processingText}>Identifying food...</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1042,6 +1234,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     color: colors.text,
   },
+  aiNote: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginBottom: spacing.sm,
+    lineHeight: 18,
+  },
   sheetLabel: {
     fontSize: 11,
     fontFamily: 'Inter_600SemiBold',
@@ -1171,5 +1369,68 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_700Bold',
     color: '#000',
+  },
+
+  // ── Meal photo camera ─────────────────────────────────────────────────────────
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  cameraView: {
+    flex: 1,
+  },
+  cameraCloseBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 54 : 28,
+    left: spacing.md,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraBottomOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: Platform.OS === 'ios' ? 48 : 32,
+    paddingTop: spacing.lg,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  cameraHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.85)',
+  },
+  captureBtn: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  captureBtnInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  processingText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    color: '#fff',
   },
 });
